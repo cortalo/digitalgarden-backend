@@ -78,6 +78,15 @@ func convert(n ast.Node, source []byte) Node {
 	case ast.KindText:
 		t := n.(*ast.Text)
 		return Node{Type: "text", Text: string(t.Segment.Value(source))}
+	case ast.KindEmphasis:
+		e := n.(*ast.Emphasis)
+		typeName := "italic"
+		if e.Level >= 2 {
+			typeName = "bold"
+		}
+		return Node{Type: typeName, Children: convertChildren(n, source)}
+	case ast.KindCodeSpan:
+		return Node{Type: "inlineCode", Text: inlineText(n, source)}
 	case mathjax.KindInlineMath:
 		return Node{Type: "inlineMath", Text: inlineText(n, source)}
 	case mathjax.KindMathBlock:
@@ -98,9 +107,11 @@ func convert(n ast.Node, source []byte) Node {
 	}
 }
 
-// inlineText concatenates an inline math node's raw text segments (goldmark-
-// mathjax stores the LaTeX source as one or more ast.Text children rather
-// than a single segment) into the formula's source string, e.g. "E = mc^2".
+// inlineText concatenates a node's raw ast.Text children into a single
+// string — used for node types whose content is always flat text with no
+// further inline structure of its own (inlineMath's LaTeX source,
+// inlineCode's code), since goldmark can split that text across more than
+// one ast.Text child (e.g. inlineMath, if the formula spans a line break).
 func inlineText(n ast.Node, source []byte) string {
 	var sb strings.Builder
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {

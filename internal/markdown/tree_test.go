@@ -142,3 +142,57 @@ func TestParse_CodeBlock(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("parsed tree:\n%s", out)
 }
+
+const emphasisMarkdown = "**bold**, *italic*, and `inline code`, plus **bold with *nested italic* inside**.\n"
+
+func TestParse_Emphasis(t *testing.T) {
+	got := Parse([]byte(emphasisMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	paragraph := got.Children[0]
+	assert.Equal(t, "paragraph", paragraph.Type)
+	require.Len(t, paragraph.Children, 8)
+
+	bold := paragraph.Children[0]
+	assert.Equal(t, "bold", bold.Type)
+	require.Len(t, bold.Children, 1)
+	assert.Equal(t, "text", bold.Children[0].Type)
+	assert.Equal(t, "bold", bold.Children[0].Text)
+
+	assert.Equal(t, "text", paragraph.Children[1].Type)
+	assert.Equal(t, ", ", paragraph.Children[1].Text)
+
+	italic := paragraph.Children[2]
+	assert.Equal(t, "italic", italic.Type)
+	require.Len(t, italic.Children, 1)
+	assert.Equal(t, "italic", italic.Children[0].Text)
+
+	assert.Equal(t, "text", paragraph.Children[3].Type)
+	assert.Equal(t, ", and ", paragraph.Children[3].Text)
+
+	code := paragraph.Children[4]
+	assert.Equal(t, "inlineCode", code.Type)
+	assert.Equal(t, "inline code", code.Text)
+
+	assert.Equal(t, "text", paragraph.Children[5].Type)
+	assert.Equal(t, ", plus ", paragraph.Children[5].Text)
+
+	nestedBold := paragraph.Children[6]
+	assert.Equal(t, "bold", nestedBold.Type)
+	require.Len(t, nestedBold.Children, 3)
+	assert.Equal(t, "text", nestedBold.Children[0].Type)
+	assert.Equal(t, "bold with ", nestedBold.Children[0].Text)
+	assert.Equal(t, "italic", nestedBold.Children[1].Type)
+	assert.Equal(t, "nested italic", nestedBold.Children[1].Children[0].Text)
+	assert.Equal(t, "text", nestedBold.Children[2].Type)
+	assert.Equal(t, " inside", nestedBold.Children[2].Text)
+
+	assert.Equal(t, "text", paragraph.Children[7].Type)
+	assert.Equal(t, ".", paragraph.Children[7].Text)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
