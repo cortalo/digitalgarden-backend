@@ -98,6 +98,25 @@ func (h *Handler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, toNoteResponse(n))
 }
 
+// Download handles GET /api/notes/:slug/download, serving the note's
+// original markdown source as a file rather than JSON. Content-
+// Disposition: attachment makes a plain <a href> link on the frontend
+// trigger a browser download with no client-side JS needed. Public, same
+// access level as Get — the note is already published/public content, so
+// downloading its source isn't a bigger exposure than reading it.
+func (h *Handler) Download(c *gin.Context) {
+	n, err := h.svc.Get(c.Request.Context(), c.Param("slug"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	// n.Slug only ever contains [a-z0-9-] (see note.Slugify), so it's
+	// always safe to interpolate directly into this header.
+	c.Header("Content-Disposition", `attachment; filename="`+n.Slug+`.md"`)
+	c.Data(http.StatusOK, "text/markdown; charset=utf-8", []byte(n.RawMarkdown))
+}
+
 type publishRequest struct {
 	Title    string   `json:"title" binding:"required"`
 	Markdown string   `json:"markdown" binding:"required"`

@@ -59,6 +59,7 @@ func main() {
 	noteHandler := notehandler.NewHandler(noteService)
 	r.GET("/api/notes", noteHandler.List)
 	r.GET("/api/notes/:slug", noteHandler.Get)
+	r.GET("/api/notes/:slug/download", noteHandler.Download)
 	r.POST("/api/notes", authhandler.RequireAuth(tokenIssuer), noteHandler.Publish)
 
 	// Vercel's Go runtime assigns a port dynamically and proxies to it via
