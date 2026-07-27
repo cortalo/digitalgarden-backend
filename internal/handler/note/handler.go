@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/Cortalo/digitalgarden-backend/internal/domain/note"
+	authhandler "github.com/Cortalo/digitalgarden-backend/internal/handler/auth"
 	"github.com/Cortalo/digitalgarden-backend/internal/markdown"
 )
 
@@ -21,6 +22,7 @@ import (
 type Service interface {
 	Get(ctx context.Context, slug string) (note.Note, error)
 	List(ctx context.Context, limit int32) ([]note.Note, error)
+	Publish(ctx context.Context, authorUserID int64, title, markdownSource, slug, excerpt string, tags []string) (note.Note, error)
 }
 
 type Handler struct {
@@ -94,6 +96,41 @@ func (h *Handler) Get(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, toNoteResponse(n))
+}
+
+type publishRequest struct {
+	Title    string   `json:"title" binding:"required"`
+	Markdown string   `json:"markdown" binding:"required"`
+	Slug     string   `json:"slug"`
+	Excerpt  string   `json:"excerpt"`
+	Tags     []string `json:"tags"`
+}
+
+// Publish handles POST /api/notes, behind authhandler.RequireAuth. v1
+// scope is text-only — no attachment upload yet (see CLAUDE.md's Upload
+// scope and the note service's own doc comment).
+func (h *Handler) Publish(c *gin.Context) {
+	userID, ok := authhandler.UserID(c)
+	if !ok {
+		// Defense in depth — this route should always sit behind
+		// RequireAuth, which would already have aborted the request.
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req publishRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	n, err := h.svc.Publish(c.Request.Context(), userID, req.Title, req.Markdown, req.Slug, req.Excerpt, req.Tags)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, toNoteResponse(n))
 }
 
 var errInvalidLimit = errors.New("limit must be a positive integer")

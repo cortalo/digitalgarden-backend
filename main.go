@@ -47,17 +47,19 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"message": "digitalgarden-backend"})
 	})
 
-	noteService := noteservice.NewService(db)
-	noteHandler := notehandler.NewHandler(noteService)
-	r.GET("/api/notes", noteHandler.List)
-	r.GET("/api/notes/:slug", noteHandler.Get)
+	userService := userservice.NewService(db)
 
 	googleVerifier := googleauth.NewVerifier(cfg.GoogleClientID)
 	tokenIssuer := authtoken.NewIssuer(cfg.JWTSecret)
-	userService := userservice.NewService(db)
 	authService := authservice.NewService(googleVerifier, userService, tokenIssuer)
 	authHandler := authhandler.NewHandler(authService)
 	r.POST("/api/auth/google", authHandler.Login)
+
+	noteService := noteservice.NewService(db, userService)
+	noteHandler := notehandler.NewHandler(noteService)
+	r.GET("/api/notes", noteHandler.List)
+	r.GET("/api/notes/:slug", noteHandler.Get)
+	r.POST("/api/notes", authhandler.RequireAuth(tokenIssuer), noteHandler.Publish)
 
 	// Vercel's Go runtime assigns a port dynamically and proxies to it via
 	// the PORT env var — a hardcoded ":8080" is unreachable in that

@@ -8,10 +8,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Cortalo/digitalgarden-backend/internal/domain/note"
 	"github.com/Cortalo/digitalgarden-backend/internal/markdown"
 )
+
+// pgUniqueViolation is the standard SQLSTATE code for a unique constraint
+// violation — not Postgres-specific, part of the SQL standard.
+const pgUniqueViolation = "23505"
 
 // noteRow is the persistence object (PO): the exact shape of a
 // digitalgarden_note row. Only this file knows about it; everything else
@@ -71,6 +76,55 @@ func (s *Store) GetNoteBySlug(ctx context.Context, slug string) (note.Note, erro
 	}
 
 	return row.toDomain()
+}
+
+// CreateNote inserts a new digitalgarden_note row. published_at and
+// note_id are left to their column defaults (now() / identity) rather
+// than set by the caller. A slug collision comes back as
+// note.ErrSlugTaken so the service can retry with a suffixed candidate.
+func (s *Store) CreateNote(ctx context.Context, n note.Note) (note.Note, error) {
+	tree, err := json.Marshal(n.ParsedTree)
+	if err != nil {
+		return note.Note{}, fmt.Errorf("marshal parsed_tree: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx,
+		"insert into digitalgarden.digitalgarden_note "+
+			"(title, slug, author_user_id, author_name, raw_markdown, parsed_tree, excerpt, tags) "+
+			"values ($1, $2, $3, $4, $5, $6, $7, $8) returning "+noteColumns,
+		// tree is passed as string, not []byte: under the simple query
+		// protocol (required for Supabase's transaction-mode pooler, see
+		// New()), pgx encodes a []byte parameter as a bytea literal, which
+		// Postgres then refuses to accept as jsonb ("invalid input syntax
+		// for type json") — a string parameter round-trips as text, which
+		// Postgres can parse as JSON directly.
+		n.Title, n.Slug, n.AuthorUserID, n.AuthorName, n.RawMarkdown, string(tree), n.Excerpt, n.Tags,
+	)
+	if err != nil {
+		return note.Note{}, wrapInsertNoteErr(err)
+	}
+
+	row, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[noteRow])
+	if err != nil {
+		return note.Note{}, wrapInsertNoteErr(err)
+	}
+
+	return row.toDomain()
+}
+
+// wrapInsertNoteErr maps a slug unique-constraint violation to
+// note.ErrSlugTaken (so the service can retry with a suffixed candidate)
+// and wraps anything else as-is. Depending on how the driver executes the
+// query, the constraint violation can surface from either the initial
+// Query call or from reading its result rows — both call sites need this
+// same check, hence the shared helper (a first version only checked one
+// of the two, and the collision path was silently never taken).
+func wrapInsertNoteErr(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		return note.ErrSlugTaken
+	}
+	return fmt.Errorf("insert note: %w", err)
 }
 
 // maxNoteListLimit is a hard ceiling on ListNotes, independent of what the

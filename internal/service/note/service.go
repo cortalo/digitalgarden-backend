@@ -2,8 +2,13 @@ package note
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/Cortalo/digitalgarden-backend/internal/domain/note"
+	"github.com/Cortalo/digitalgarden-backend/internal/markdown"
+	userservice "github.com/Cortalo/digitalgarden-backend/internal/service/user"
 )
 
 // Repository is the port this service needs from persistence. infra/
@@ -12,14 +17,23 @@ import (
 type Repository interface {
 	GetNoteBySlug(ctx context.Context, slug string) (note.Note, error)
 	ListNotes(ctx context.Context, limit int32) ([]note.Note, error)
+	CreateNote(ctx context.Context, n note.Note) (note.Note, error)
+}
+
+// AuthorFinder resolves the display name to snapshot onto a note at
+// publish time — see note.Note.AuthorName. *userservice.Service satisfies
+// this implicitly.
+type AuthorFinder interface {
+	Get(ctx context.Context, id int64) (userservice.User, error)
 }
 
 type Service struct {
-	repo Repository
+	repo    Repository
+	authors AuthorFinder
 }
 
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo Repository, authors AuthorFinder) *Service {
+	return &Service{repo: repo, authors: authors}
 }
 
 // Get returns a single published note by slug.
@@ -41,4 +55,69 @@ func (s *Service) List(ctx context.Context, limit int32) ([]note.Note, error) {
 		limit = defaultFeedLimit
 	}
 	return s.repo.ListNotes(ctx, limit)
+}
+
+// maxSlugAttempts bounds how many suffixed candidates Publish tries
+// before giving up — a handful of published notes sharing the same title
+// is expected; hundreds sharing one is almost certainly a caller bug, not
+// a case worth looping over indefinitely for.
+const maxSlugAttempts = 20
+
+// Publish parses markdownSource into a tree, snapshots the author's
+// current display name, and stores the result. v1 scope is text-only —
+// no attachment handling (see CLAUDE.md's Upload scope).
+//
+// slugOverride and excerptOverride are the caller's (optional) explicit
+// choices — an empty string means "derive it" for each independently:
+// slug falls back to Slugify(title), excerpt to ExcerptFrom(tree). A
+// non-empty slugOverride is still re-run through Slugify (never trust
+// client input to already be URL-safe) and still goes through the same
+// collision-retry loop as a derived slug — a user-chosen slug that
+// collides gets the same "-2" suffix treatment, not a hard error.
+func (s *Service) Publish(ctx context.Context, authorUserID int64, title, markdownSource, slugOverride, excerptOverride string, tags []string) (note.Note, error) {
+	author, err := s.authors.Get(ctx, authorUserID)
+	if err != nil {
+		return note.Note{}, fmt.Errorf("get author: %w", err)
+	}
+
+	tree := markdown.Parse([]byte(markdownSource))
+	if tags == nil {
+		tags = []string{}
+	}
+
+	excerpt := strings.TrimSpace(excerptOverride)
+	if excerpt == "" {
+		excerpt = note.ExcerptFrom(tree)
+	}
+
+	n := note.Note{
+		Title:        title,
+		AuthorUserID: authorUserID,
+		AuthorName:   author.Name,
+		RawMarkdown:  markdownSource,
+		ParsedTree:   tree,
+		Excerpt:      excerpt,
+		Tags:         tags,
+	}
+
+	base := note.Slugify(title)
+	if override := strings.TrimSpace(slugOverride); override != "" {
+		base = note.Slugify(override)
+	}
+	for attempt := 0; attempt < maxSlugAttempts; attempt++ {
+		n.Slug = base
+		if attempt > 0 {
+			n.Slug = fmt.Sprintf("%s-%d", base, attempt+1)
+		}
+
+		created, err := s.repo.CreateNote(ctx, n)
+		if err == nil {
+			return created, nil
+		}
+		if !errors.Is(err, note.ErrSlugTaken) {
+			return note.Note{}, err
+		}
+	}
+
+	return note.Note{}, fmt.Errorf("publish: no unique slug found for %q after %d attempts", title, maxSlugAttempts)
 }
