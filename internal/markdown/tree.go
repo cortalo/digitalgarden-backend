@@ -6,10 +6,23 @@
 package markdown
 
 import (
+	"strings"
+
+	mathjax "github.com/litao91/goldmark-mathjax"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
 )
+
+// parser adds the mathjax extension to goldmark's parser so that Obsidian/
+// KaTeX-style `$inline$` and `$$block$$` math is recognized as its own AST
+// node kind instead of falling through as plain text. We only ever use the
+// Parser half of this goldmark instance (see Parse below) — its Renderer
+// half produces MathJax-flavored HTML, which we don't want: per CLAUDE.md,
+// Go's job stops at extracting a node's structured data (here, the raw
+// LaTeX source) and tagging its type. Turning that into rendered math is a
+// frontend job (KaTeX/MathJax), same as Excalidraw/Tikz/Mermaid.
+var parser = goldmark.New(goldmark.WithExtensions(mathjax.MathJax)).Parser()
 
 // Node is our own tree shape, distinct from goldmark's internal AST.
 // goldmark's ast.Node is walked once, in convert, and turned into this
@@ -19,6 +32,7 @@ type Node struct {
 	Type     string `json:"type"`
 	Depth    int    `json:"depth,omitempty"`
 	Text     string `json:"text,omitempty"`
+	Lang     string `json:"lang,omitempty"`
 	Ordered  bool   `json:"ordered,omitempty"`
 	Children []Node `json:"children,omitempty"`
 }
@@ -26,7 +40,7 @@ type Node struct {
 // Parse converts raw markdown source into a Node tree rooted at a
 // "root" node.
 func Parse(source []byte) Node {
-	doc := goldmark.DefaultParser().Parse(text.NewReader(source))
+	doc := parser.Parse(text.NewReader(source))
 	return convert(doc, source)
 }
 
@@ -61,9 +75,46 @@ func convert(n ast.Node, source []byte) Node {
 	case ast.KindText:
 		t := n.(*ast.Text)
 		return Node{Type: "text", Text: string(t.Segment.Value(source))}
+	case mathjax.KindInlineMath:
+		return Node{Type: "inlineMath", Text: inlineText(n, source)}
+	case mathjax.KindMathBlock:
+		b := n.(*mathjax.MathBlock)
+		return Node{Type: "mathBlock", Text: linesText(b, source)}
+	case ast.KindFencedCodeBlock:
+		fcb := n.(*ast.FencedCodeBlock)
+		lang := string(fcb.Language(source))
+		// Tikz is a plugin node, same tier as Excalidraw: Go extracts the
+		// raw source and tags the type, but doesn't compile it — the
+		// browser-side tikzjax WASM engine does that, see CLAUDE.md.
+		if lang == "tikz" {
+			return Node{Type: "tikzBlock", Text: linesText(fcb, source)}
+		}
+		return Node{Type: "codeBlock", Lang: lang, Text: linesText(fcb, source)}
 	default:
 		return Node{Type: "unknown", Children: convertChildren(n, source)}
 	}
+}
+
+// inlineText concatenates an inline math node's raw text segments (goldmark-
+// mathjax stores the LaTeX source as one or more ast.Text children rather
+// than a single segment) into the formula's source string, e.g. "E = mc^2".
+func inlineText(n ast.Node, source []byte) string {
+	var sb strings.Builder
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if t, ok := c.(*ast.Text); ok {
+			sb.Write(t.Segment.Value(source))
+		}
+	}
+	return sb.String()
+}
+
+// linesText reads the raw source lines a block node spans (goldmark stores
+// these as byte-offset segments rather than a materialized string) and
+// joins them into a single trimmed string — used for node types whose
+// content is opaque source text we pass through as-is (mathBlock,
+// codeBlock, tikzBlock) rather than markdown to keep parsing further.
+func linesText(n interface{ Lines() *text.Segments }, source []byte) string {
+	return strings.TrimRight(string(n.Lines().Value(source)), "\n")
 }
 
 func convertChildren(n ast.Node, source []byte) []Node {

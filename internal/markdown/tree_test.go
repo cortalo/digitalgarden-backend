@@ -49,3 +49,69 @@ func TestParse_HelloWorld(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("parsed tree:\n%s", out)
 }
+
+const mathMarkdown = "Mass-energy equivalence: $E = mc^2$.\n\n$$\n\\frac{\\sqrt{\\pi}}{2}\n$$\n"
+
+func TestParse_Math(t *testing.T) {
+	got := Parse([]byte(mathMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 2)
+
+	paragraph := got.Children[0]
+	assert.Equal(t, "paragraph", paragraph.Type)
+	require.Len(t, paragraph.Children, 3)
+	assert.Equal(t, "text", paragraph.Children[0].Type)
+	assert.Equal(t, "inlineMath", paragraph.Children[1].Type)
+	assert.Equal(t, "E = mc^2", paragraph.Children[1].Text)
+	assert.Equal(t, "text", paragraph.Children[2].Type)
+
+	mathBlock := got.Children[1]
+	assert.Equal(t, "mathBlock", mathBlock.Type)
+	assert.Equal(t, `\frac{\sqrt{\pi}}{2}`, mathBlock.Text)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
+const tikzMarkdown = "```tikz\n\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n```\n"
+
+func TestParse_Tikz(t *testing.T) {
+	got := Parse([]byte(tikzMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	tikz := got.Children[0]
+	assert.Equal(t, "tikzBlock", tikz.Type)
+	assert.Empty(t, tikz.Lang)
+	assert.Equal(t, "\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}", tikz.Text)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
+const codeMarkdown = "```go\nfmt.Println(\"hi\")\n```\n\n```\nno language here\n```\n"
+
+func TestParse_CodeBlock(t *testing.T) {
+	got := Parse([]byte(codeMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 2)
+
+	withLang := got.Children[0]
+	assert.Equal(t, "codeBlock", withLang.Type)
+	assert.Equal(t, "go", withLang.Lang)
+	assert.Equal(t, `fmt.Println("hi")`, withLang.Text)
+
+	withoutLang := got.Children[1]
+	assert.Equal(t, "codeBlock", withoutLang.Type)
+	assert.Empty(t, withoutLang.Lang)
+	assert.Equal(t, "no language here", withoutLang.Text)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}

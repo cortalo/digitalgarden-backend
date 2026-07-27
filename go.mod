@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	github.com/gin-gonic/gin v1.12.0
+	github.com/litao91/goldmark-mathjax v0.0.0-20210217064022-a43cf739a50f
 	github.com/stretchr/testify v1.11.1
 	github.com/yuin/goldmark v1.8.4
 )

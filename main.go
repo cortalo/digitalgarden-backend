@@ -17,6 +17,27 @@ This is a paragraph.
 
 - First item
 - Second item
+- Third item
+
+Mass-energy equivalence: $E = mc^2$.
+
+$$
+\int_0^\infty e^{-x^2} \, dx = \frac{\sqrt{\pi}}{2}
+$$
+
+` + "```tikz" + `
+\usepackage{tikz}
+\begin{document}
+\begin{tikzpicture}
+\draw[fill=gray!30, thick] (0,0) circle (1);
+\node at (0,-1.5) {a circle};
+\end{tikzpicture}
+\end{document}
+` + "```" + `
+
+` + "```go" + `
+fmt.Println("hi")
+` + "```" + `
 `
 
 func main() {
