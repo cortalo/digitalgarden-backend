@@ -109,6 +109,12 @@ func convert(n ast.Node, source []byte) Node {
 		if lang == "tikz" {
 			return Node{Type: "tikzBlock", Text: linesText(fcb, source)}
 		}
+		// Unlike tikz, an svg fence (Obsidian's SVG Editor plugin) is
+		// already final, renderable markup — nothing to compile, the
+		// frontend just needs to drop it into the DOM as-is.
+		if lang == "svg" {
+			return Node{Type: "svgBlock", Text: linesText(fcb, source)}
+		}
 		return Node{Type: "codeBlock", Lang: lang, Text: linesText(fcb, source)}
 	default:
 		return Node{Type: "unknown", Children: convertChildren(n, source)}

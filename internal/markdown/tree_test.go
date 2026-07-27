@@ -120,6 +120,27 @@ func TestParse_Tikz(t *testing.T) {
 	t.Logf("parsed tree:\n%s", out)
 }
 
+const svgMarkdown = "```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n  <circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"red\" />\n</svg>\n```\n"
+
+func TestParse_Svg(t *testing.T) {
+	got := Parse([]byte(svgMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	svg := got.Children[0]
+	assert.Equal(t, "svgBlock", svg.Type)
+	assert.Empty(t, svg.Lang)
+	assert.Equal(t,
+		"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">\n  <circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"red\" />\n</svg>",
+		svg.Text,
+	)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
 const codeMarkdown = "```go\nfmt.Println(\"hi\")\n```\n\n```\nno language here\n```\n"
 
 func TestParse_CodeBlock(t *testing.T) {
