@@ -1,0 +1,14 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+/digitalgarden-backend
+
+# Vercel
+.vercel
+.idea
+.env.local
