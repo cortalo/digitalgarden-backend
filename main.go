@@ -10,9 +10,14 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/Cortalo/digitalgarden-backend/internal/config"
+	authhandler "github.com/Cortalo/digitalgarden-backend/internal/handler/auth"
 	notehandler "github.com/Cortalo/digitalgarden-backend/internal/handler/note"
+	"github.com/Cortalo/digitalgarden-backend/internal/infra/authtoken"
+	"github.com/Cortalo/digitalgarden-backend/internal/infra/googleauth"
 	"github.com/Cortalo/digitalgarden-backend/internal/infra/postgres"
+	authservice "github.com/Cortalo/digitalgarden-backend/internal/service/auth"
 	noteservice "github.com/Cortalo/digitalgarden-backend/internal/service/note"
+	userservice "github.com/Cortalo/digitalgarden-backend/internal/service/user"
 )
 
 func main() {
@@ -34,8 +39,8 @@ func main() {
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{cfg.AllowedOrigin},
-		AllowMethods: []string{"GET"},
-		AllowHeaders: []string{"Content-Type"},
+		AllowMethods: []string{"GET", "POST"},
+		AllowHeaders: []string{"Content-Type", "Authorization"},
 	}))
 
 	r.GET("/api/health", func(c *gin.Context) {
@@ -46,6 +51,13 @@ func main() {
 	noteHandler := notehandler.NewHandler(noteService)
 	r.GET("/api/notes", noteHandler.List)
 	r.GET("/api/notes/:slug", noteHandler.Get)
+
+	googleVerifier := googleauth.NewVerifier(cfg.GoogleClientID)
+	tokenIssuer := authtoken.NewIssuer(cfg.JWTSecret)
+	userService := userservice.NewService(db)
+	authService := authservice.NewService(googleVerifier, userService, tokenIssuer)
+	authHandler := authhandler.NewHandler(authService)
+	r.POST("/api/auth/google", authHandler.Login)
 
 	// Vercel's Go runtime assigns a port dynamically and proxies to it via
 	// the PORT env var — a hardcoded ":8080" is unreachable in that
