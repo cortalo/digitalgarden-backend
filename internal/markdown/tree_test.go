@@ -75,6 +75,33 @@ func TestParse_Math(t *testing.T) {
 	t.Logf("parsed tree:\n%s", out)
 }
 
+// adjacentMathBlocksMarkdown is a minimal reproduction (bisected from a
+// real note, CS229M.md, that crashed the live publish endpoint with a 500)
+// of a bug in goldmark-mathjax: two `$$...$$` blocks back to back with no
+// blank line between them. Its block parser keeps state in a single
+// shared parser.Context key rather than per-node, and Close() nils that
+// key out — when a second math block's Continue() runs right after the
+// first one's Close(), it reads that now-nil value and panics on the type
+// assertion (block.go: `pc.Get(mathBlockInfoKey).(*mathBlockData)`).
+const adjacentMathBlocksMarkdown = "$$\na\n$$\n$$\nb\n$$\n"
+
+func TestParse_AdjacentMathBlocks(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Parse panicked on adjacent math blocks: %v", r)
+		}
+	}()
+
+	got := Parse([]byte(adjacentMathBlocksMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 2)
+	assert.Equal(t, "mathBlock", got.Children[0].Type)
+	assert.Equal(t, "a", got.Children[0].Text)
+	assert.Equal(t, "mathBlock", got.Children[1].Type)
+	assert.Equal(t, "b", got.Children[1].Text)
+}
+
 const tikzMarkdown = "```tikz\n\\begin{tikzpicture}\n\\draw (0,0) circle (1);\n\\end{tikzpicture}\n```\n"
 
 func TestParse_Tikz(t *testing.T) {

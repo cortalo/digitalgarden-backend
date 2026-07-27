@@ -38,8 +38,11 @@ type Node struct {
 }
 
 // Parse converts raw markdown source into a Node tree rooted at a
-// "root" node.
+// "root" node. source itself is never mutated or returned — preprocess
+// works against its own copy, so a caller storing the original alongside
+// the parsed tree (e.g. as raw_markdown) is unaffected by it.
 func Parse(source []byte) Node {
+	source = preprocess(source)
 	doc := parser.Parse(text.NewReader(source))
 	return convert(doc, source)
 }
