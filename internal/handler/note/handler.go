@@ -1,0 +1,148 @@
+// Package notehandler is the HTTP adapter for the note domain. It knows
+// about JSON and gin; it only depends on the Service interface defined
+// here, never on the concrete service/postgres implementations.
+package notehandler
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/Cortalo/digitalgarden-backend/internal/domain/note"
+	"github.com/Cortalo/digitalgarden-backend/internal/markdown"
+)
+
+// Service is defined here, by the consumer, so the concrete
+// *noteservice.Service satisfies it implicitly.
+type Service interface {
+	Get(ctx context.Context, slug string) (note.Note, error)
+	List(ctx context.Context, limit int32) ([]note.Note, error)
+}
+
+type Handler struct {
+	svc Service
+}
+
+func NewHandler(svc Service) *Handler {
+	return &Handler{svc: svc}
+}
+
+// noteResponse is the full single-note payload: metadata plus the parsed
+// tree. This is the one JSON shape in the whole system that includes raw
+// markdown-derived content — see CLAUDE.md's "API surface the frontend
+// needs": the frontend renders Tree by walking node.type, never by parsing
+// markdown itself.
+type noteResponse struct {
+	ID          int64         `json:"id"`
+	Title       string        `json:"title"`
+	Slug        string        `json:"slug"`
+	Author      string        `json:"author"`
+	Excerpt     string        `json:"excerpt"`
+	Tags        []string      `json:"tags"`
+	PublishedAt time.Time     `json:"published_at"`
+	Tree        markdown.Node `json:"tree"`
+}
+
+// summaryResponse is what the feed lists: enough to render a card and link
+// to the note, without shipping every note's full parsed tree over the
+// wire on every feed load.
+type summaryResponse struct {
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`
+	Slug        string    `json:"slug"`
+	Author      string    `json:"author"`
+	Excerpt     string    `json:"excerpt"`
+	Tags        []string  `json:"tags"`
+	PublishedAt time.Time `json:"published_at"`
+}
+
+func toNoteResponse(n note.Note) noteResponse {
+	return noteResponse{
+		ID:          n.ID,
+		Title:       n.Title,
+		Slug:        n.Slug,
+		Author:      n.AuthorName,
+		Excerpt:     n.Excerpt,
+		Tags:        n.Tags,
+		PublishedAt: n.PublishedAt,
+		Tree:        n.ParsedTree,
+	}
+}
+
+func toSummaryResponse(n note.Note) summaryResponse {
+	return summaryResponse{
+		ID:          n.ID,
+		Title:       n.Title,
+		Slug:        n.Slug,
+		Author:      n.AuthorName,
+		Excerpt:     n.Excerpt,
+		Tags:        n.Tags,
+		PublishedAt: n.PublishedAt,
+	}
+}
+
+// Get handles GET /api/notes/:slug.
+func (h *Handler) Get(c *gin.Context) {
+	n, err := h.svc.Get(c.Request.Context(), c.Param("slug"))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, toNoteResponse(n))
+}
+
+var errInvalidLimit = errors.New("limit must be a positive integer")
+
+// List handles GET /api/notes. limit is an optional query param; the
+// service falls back to its own default, and the repository enforces a
+// hard ceiling regardless of what's requested.
+func (h *Handler) List(c *gin.Context) {
+	limit, err := parseLimit(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	notes, err := h.svc.List(c.Request.Context(), limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := make([]summaryResponse, len(notes))
+	for i, n := range notes {
+		result[i] = toSummaryResponse(n)
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// parseLimit reads the optional ?limit= query param. Absent means "use the
+// service default"; present-but-invalid is a client error.
+func parseLimit(c *gin.Context) (int32, error) {
+	raw := c.Query("limit")
+	if raw == "" {
+		return 0, nil
+	}
+
+	limit, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, errInvalidLimit
+	}
+
+	return int32(limit), nil
+}
+
+func respondError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, note.ErrNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+}

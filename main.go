@@ -1,66 +1,54 @@
 package main
 
 import (
+	"context"
+	"log"
 	"net/http"
-	"os"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 
-	"github.com/Cortalo/digitalgarden-backend/internal/markdown"
+	"github.com/Cortalo/digitalgarden-backend/internal/config"
+	notehandler "github.com/Cortalo/digitalgarden-backend/internal/handler/note"
+	"github.com/Cortalo/digitalgarden-backend/internal/infra/postgres"
+	noteservice "github.com/Cortalo/digitalgarden-backend/internal/service/note"
 )
 
-// helloWorldMarkdown is temporary, hardcoded content standing in for a
-// real stored note — there's no database yet. Once notes are actually
-// stored, this endpoint's handler should read from that instead.
-const helloWorldMarkdown = `# Hello World
-
-This is a paragraph.
-
-- First item
-- Second item
-- Third item
-
-Mass-energy equivalence: $E = mc^2$.
-
-$$
-\int_0^\infty e^{-x^2} \, dx = \frac{\sqrt{\pi}}{2}
-$$
-
-` + "```tikz" + `
-\usepackage{tikz}
-\begin{document}
-\begin{tikzpicture}
-\draw[fill=gray!30, thick] (0,0) circle (1);
-\node at (0,-1.5) {a circle};
-\end{tikzpicture}
-\end{document}
-` + "```" + `
-
-` + "```go" + `
-fmt.Println("hi")
-` + "```" + `
-`
-
 func main() {
+	// No-op in production (Vercel injects env vars directly); fills in
+	// DATABASE_URL etc. for local runs.
+	_ = godotenv.Load(".env.local")
+
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	db, err := postgres.New(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("connect to database: %v", err)
+	}
+	defer db.Close()
+
 	r := gin.Default()
+	r.Use(cors.New(cors.Config{
+		AllowOrigins: []string{cfg.AllowedOrigin},
+		AllowMethods: []string{"GET"},
+		AllowHeaders: []string{"Content-Type"},
+	}))
 
 	r.GET("/api/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "digitalgarden-backend"})
 	})
 
-	// Proves the Step 1 parser works behind a real HTTP boundary, not
-	// just inside a Go test. Still hardcoded content — no DB, no auth.
-	r.GET("/api/notes/hello-world", func(c *gin.Context) {
-		tree := markdown.Parse([]byte(helloWorldMarkdown))
-		c.JSON(http.StatusOK, tree)
-	})
+	noteService := noteservice.NewService(db)
+	noteHandler := notehandler.NewHandler(noteService)
+	r.GET("/api/notes", noteHandler.List)
+	r.GET("/api/notes/:slug", noteHandler.Get)
 
 	// Vercel's Go runtime assigns a port dynamically and proxies to it via
 	// the PORT env var — a hardcoded ":8080" is unreachable in that
-	// environment. Falling back to 8080 keeps `go run .` working locally.
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	r.Run(":" + port)
+	// environment. cfg.Port falls back to 8080 for local `go run .`.
+	r.Run(":" + cfg.Port)
 }
