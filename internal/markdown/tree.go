@@ -33,6 +33,7 @@ type Node struct {
 	Depth    int    `json:"depth,omitempty"`
 	Text     string `json:"text,omitempty"`
 	Lang     string `json:"lang,omitempty"`
+	Href     string `json:"href,omitempty"`
 	Ordered  bool   `json:"ordered,omitempty"`
 	Children []Node `json:"children,omitempty"`
 }
@@ -87,6 +88,13 @@ func convert(n ast.Node, source []byte) Node {
 		return Node{Type: typeName, Children: convertChildren(n, source)}
 	case ast.KindCodeSpan:
 		return Node{Type: "inlineCode", Text: inlineText(n, source)}
+	case ast.KindLink:
+		l := n.(*ast.Link)
+		return Node{Type: "link", Href: string(l.Destination), Children: convertChildren(n, source)}
+	case ast.KindAutoLink:
+		al := n.(*ast.AutoLink)
+		url := string(al.URL(source))
+		return Node{Type: "link", Href: url, Children: []Node{{Type: "text", Text: string(al.Label(source))}}}
 	case mathjax.KindInlineMath:
 		return Node{Type: "inlineMath", Text: inlineText(n, source)}
 	case mathjax.KindMathBlock:

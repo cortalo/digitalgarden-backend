@@ -196,3 +196,50 @@ func TestParse_Emphasis(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("parsed tree:\n%s", out)
 }
+
+const linkMarkdown = "[a plain link](https://example.com), a link with **bold** text: [**bold link**](https://bold.example.com), and a bare <https://auto.example.com> autolink.\n"
+
+func TestParse_Link(t *testing.T) {
+	got := Parse([]byte(linkMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	paragraph := got.Children[0]
+	assert.Equal(t, "paragraph", paragraph.Type)
+
+	plain := paragraph.Children[0]
+	assert.Equal(t, "link", plain.Type)
+	assert.Equal(t, "https://example.com", plain.Href)
+	require.Len(t, plain.Children, 1)
+	assert.Equal(t, "text", plain.Children[0].Type)
+	assert.Equal(t, "a plain link", plain.Children[0].Text)
+
+	var richLink, autolink *Node
+	for i := range paragraph.Children {
+		c := &paragraph.Children[i]
+		if c.Type != "link" {
+			continue
+		}
+		switch c.Href {
+		case "https://bold.example.com":
+			richLink = c
+		case "https://auto.example.com":
+			autolink = c
+		}
+	}
+
+	require.NotNil(t, richLink, "expected a link to https://bold.example.com")
+	require.Len(t, richLink.Children, 1)
+	assert.Equal(t, "bold", richLink.Children[0].Type)
+	assert.Equal(t, "bold link", richLink.Children[0].Children[0].Text)
+
+	require.NotNil(t, autolink, "expected an autolink to https://auto.example.com")
+	require.Len(t, autolink.Children, 1)
+	assert.Equal(t, "text", autolink.Children[0].Type)
+	assert.Equal(t, "https://auto.example.com", autolink.Children[0].Text)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
