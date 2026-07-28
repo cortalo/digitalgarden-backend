@@ -41,6 +41,16 @@ type Note struct {
 	PublishedAt time.Time
 }
 
+// SearchHit is one search result: a note (partially populated — a
+// search-derived Note carries no ParsedTree, since the index only stores
+// what a result card needs, not the full parsed tree structure) plus the
+// highlighted snippets showing where the keyword matched, across whichever
+// of title/author_name/excerpt/content actually matched.
+type SearchHit struct {
+	Note     Note
+	Snippets []string
+}
+
 var slugNonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
 // Slugify turns a title into a URL-safe slug: lowercase, non-alphanumeric

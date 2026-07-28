@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/Cortalo/digitalgarden-backend/internal/domain/note"
@@ -27,13 +28,26 @@ type AuthorFinder interface {
 	Get(ctx context.Context, id int64) (userservice.User, error)
 }
 
+// SearchIndex is a second, independent port — a keyword-searchable index
+// that mirrors a subset of what's in Postgres (title, author name,
+// excerpt, raw content). Postgres remains the sole source of truth
+// (see Repository); this index only exists to answer "find by keyword"
+// queries. Kept in sync from Publish (see IndexNote's call site below),
+// not treated as authoritative — a failed IndexNote never fails a
+// publish.
+type SearchIndex interface {
+	IndexNote(ctx context.Context, n note.Note) error
+	Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error)
+}
+
 type Service struct {
 	repo    Repository
 	authors AuthorFinder
+	search  SearchIndex
 }
 
-func NewService(repo Repository, authors AuthorFinder) *Service {
-	return &Service{repo: repo, authors: authors}
+func NewService(repo Repository, authors AuthorFinder, search SearchIndex) *Service {
+	return &Service{repo: repo, authors: authors, search: search}
 }
 
 // Get returns a single published note by slug.
@@ -112,6 +126,13 @@ func (s *Service) Publish(ctx context.Context, authorUserID int64, title, markdo
 
 		created, err := s.repo.CreateNote(ctx, n)
 		if err == nil {
+			// Best-effort: Postgres is already the source of truth for
+			// this note, so a search-index hiccup must not fail a
+			// publish that otherwise succeeded — the index is a
+			// derived, rebuildable cache (see CLAUDE.md).
+			if err := s.search.IndexNote(ctx, created); err != nil {
+				log.Printf("note: index note %d: %v", created.ID, err)
+			}
 			return created, nil
 		}
 		if !errors.Is(err, note.ErrSlugTaken) {
@@ -120,4 +141,17 @@ func (s *Service) Publish(ctx context.Context, authorUserID int64, title, markdo
 	}
 
 	return note.Note{}, fmt.Errorf("publish: no unique slug found for %q after %d attempts", title, maxSlugAttempts)
+}
+
+// defaultSearchLimit is how many search hits are returned when the caller
+// doesn't ask for a specific amount — mirrors List's defaultFeedLimit.
+const defaultSearchLimit = 20
+
+// Search returns up to limit notes matching keyword, most relevant first,
+// each with the snippets showing where it matched.
+func (s *Service) Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error) {
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	return s.search.Search(ctx, keyword, limit)
 }

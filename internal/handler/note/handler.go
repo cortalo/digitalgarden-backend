@@ -23,6 +23,7 @@ type Service interface {
 	Get(ctx context.Context, slug string) (note.Note, error)
 	List(ctx context.Context, limit int32) ([]note.Note, error)
 	Publish(ctx context.Context, authorUserID int64, title, markdownSource, slug, excerpt string, tags []string) (note.Note, error)
+	Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error)
 }
 
 type Handler struct {
@@ -86,6 +87,34 @@ func toSummaryResponse(n note.Note) summaryResponse {
 		Excerpt:     n.Excerpt,
 		Tags:        n.Tags,
 		PublishedAt: n.PublishedAt,
+	}
+}
+
+// searchHitResponse is a search result row: the same card-rendering
+// fields as summaryResponse, plus the snippets showing where the keyword
+// actually matched (title, author name, excerpt, and/or body — see
+// noteservice.Search).
+type searchHitResponse struct {
+	ID          int64     `json:"id"`
+	Title       string    `json:"title"`
+	Slug        string    `json:"slug"`
+	Author      string    `json:"author"`
+	Excerpt     string    `json:"excerpt"`
+	Tags        []string  `json:"tags"`
+	PublishedAt time.Time `json:"published_at"`
+	Snippets    []string  `json:"snippets"`
+}
+
+func toSearchHitResponse(hit note.SearchHit) searchHitResponse {
+	return searchHitResponse{
+		ID:          hit.Note.ID,
+		Title:       hit.Note.Title,
+		Slug:        hit.Note.Slug,
+		Author:      hit.Note.AuthorName,
+		Excerpt:     hit.Note.Excerpt,
+		Tags:        hit.Note.Tags,
+		PublishedAt: hit.Note.PublishedAt,
+		Snippets:    hit.Snippets,
 	}
 }
 
@@ -175,6 +204,35 @@ func (h *Handler) List(c *gin.Context) {
 	result := make([]summaryResponse, len(notes))
 	for i, n := range notes {
 		result[i] = toSummaryResponse(n)
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// Search handles GET /api/notes/search?q=. Public, same access level as
+// List — search only surfaces already-published content.
+func (h *Handler) Search(c *gin.Context) {
+	keyword := c.Query("q")
+	if keyword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "q is required"})
+		return
+	}
+
+	limit, err := parseLimit(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	hits, err := h.svc.Search(c.Request.Context(), keyword, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	result := make([]searchHitResponse, len(hits))
+	for i, hit := range hits {
+		result[i] = toSearchHitResponse(hit)
 	}
 
 	c.JSON(http.StatusOK, result)

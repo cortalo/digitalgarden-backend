@@ -13,6 +13,7 @@ import (
 	authhandler "github.com/Cortalo/digitalgarden-backend/internal/handler/auth"
 	notehandler "github.com/Cortalo/digitalgarden-backend/internal/handler/note"
 	"github.com/Cortalo/digitalgarden-backend/internal/infra/authtoken"
+	"github.com/Cortalo/digitalgarden-backend/internal/infra/elasticsearch"
 	"github.com/Cortalo/digitalgarden-backend/internal/infra/googleauth"
 	"github.com/Cortalo/digitalgarden-backend/internal/infra/postgres"
 	authservice "github.com/Cortalo/digitalgarden-backend/internal/service/auth"
@@ -55,9 +56,11 @@ func main() {
 	authHandler := authhandler.NewHandler(authService)
 	r.POST("/api/auth/google", authHandler.Login)
 
-	noteService := noteservice.NewService(db, userService)
+	searchIndex := elasticsearch.New(cfg.BonsaiURL, cfg.BonsaiAccessKey, cfg.BonsaiAccessSecret)
+	noteService := noteservice.NewService(db, userService, searchIndex)
 	noteHandler := notehandler.NewHandler(noteService)
 	r.GET("/api/notes", noteHandler.List)
+	r.GET("/api/notes/search", noteHandler.Search)
 	r.GET("/api/notes/:slug", noteHandler.Get)
 	r.GET("/api/notes/:slug/download", noteHandler.Download)
 	r.POST("/api/notes", authhandler.RequireAuth(tokenIssuer), noteHandler.Publish)
