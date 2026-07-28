@@ -74,3 +74,30 @@ func (c *Client) IndexNote(ctx context.Context, n note.Note) error {
 	}
 	return nil
 }
+
+// DeleteNote removes a note from the search index, called from
+// noteservice.Service.Delete right after a successful Postgres delete —
+// best-effort, same as IndexNote: a failure here is logged by the caller
+// and must never fail the delete itself. A 404 (the doc was already
+// absent — e.g. the original IndexNote call had failed) is treated as
+// success, not an error: the end state either way is "not in the index."
+func (c *Client) DeleteNote(ctx context.Context, id int64) error {
+	url := c.baseURL + "/" + noteIndex + "/_doc/" + strconv.FormatInt(id, 10)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return fmt.Errorf("elasticsearch: build delete request: %w", err)
+	}
+	req.SetBasicAuth(c.accessKey, c.accessSecret)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("elasticsearch: delete note %d: %w", id, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("elasticsearch: delete note %d: status %d: %s", id, resp.StatusCode, respBody)
+	}
+	return nil
+}

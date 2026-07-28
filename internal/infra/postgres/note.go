@@ -101,30 +101,31 @@ func (s *Store) CreateNote(ctx context.Context, n note.Note) (note.Note, error) 
 		n.Title, n.Slug, n.AuthorUserID, n.AuthorName, n.RawMarkdown, string(tree), n.Excerpt, n.Tags,
 	)
 	if err != nil {
-		return note.Note{}, wrapInsertNoteErr(err)
+		return note.Note{}, wrapNoteWriteErr(err)
 	}
 
 	row, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[noteRow])
 	if err != nil {
-		return note.Note{}, wrapInsertNoteErr(err)
+		return note.Note{}, wrapNoteWriteErr(err)
 	}
 
 	return row.toDomain()
 }
 
-// wrapInsertNoteErr maps a slug unique-constraint violation to
-// note.ErrSlugTaken (so the service can retry with a suffixed candidate)
-// and wraps anything else as-is. Depending on how the driver executes the
-// query, the constraint violation can surface from either the initial
-// Query call or from reading its result rows — both call sites need this
-// same check, hence the shared helper (a first version only checked one
-// of the two, and the collision path was silently never taken).
-func wrapInsertNoteErr(err error) error {
+// wrapNoteWriteErr maps a slug unique-constraint violation to
+// note.ErrSlugTaken and wraps anything else as-is. Shared by CreateNote
+// and UpdateNote — both write slug, both hit the same constraint.
+// Depending on how the driver executes the query, the violation can
+// surface from either the initial Query call or from reading its result
+// rows — both call sites need this same check, hence the shared helper (a
+// first version only checked one of the two, and the collision path was
+// silently never taken).
+func wrapNoteWriteErr(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return note.ErrSlugTaken
 	}
-	return fmt.Errorf("insert note: %w", err)
+	return fmt.Errorf("write note: %w", err)
 }
 
 // maxNoteListLimit is a hard ceiling on ListNotes, independent of what the
@@ -164,4 +165,58 @@ func (s *Store) ListNotes(ctx context.Context, limit int32) ([]note.Note, error)
 		result[i] = n
 	}
 	return result, nil
+}
+
+// UpdateNote overwrites an existing digitalgarden_note row in place — no
+// version history, matching the domain's "just update the row" scope.
+// n.ID identifies which row; published_at is left untouched (only the
+// column default sets it, at insert time). A slug collision comes back as
+// note.ErrSlugTaken — unlike CreateNote, the service does not retry this
+// with a suffix, since an update's slug is an explicit caller choice.
+func (s *Store) UpdateNote(ctx context.Context, n note.Note) (note.Note, error) {
+	tree, err := json.Marshal(n.ParsedTree)
+	if err != nil {
+		return note.Note{}, fmt.Errorf("marshal parsed_tree: %w", err)
+	}
+
+	rows, err := s.pool.Query(ctx,
+		"update digitalgarden.digitalgarden_note set "+
+			"title = $1, slug = $2, raw_markdown = $3, parsed_tree = $4, excerpt = $5, tags = $6 "+
+			"where note_id = $7 returning "+noteColumns,
+		// tree as string, not []byte — see CreateNote's comment on the
+		// same encoding quirk.
+		n.Title, n.Slug, n.RawMarkdown, string(tree), n.Excerpt, n.Tags, n.ID,
+	)
+	if err != nil {
+		return note.Note{}, wrapNoteWriteErr(err)
+	}
+
+	row, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[noteRow])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return note.Note{}, note.ErrNotFound
+		}
+		return note.Note{}, wrapNoteWriteErr(err)
+	}
+
+	return row.toDomain()
+}
+
+// DeleteNote removes a digitalgarden_note row outright — no soft-delete
+// flag, matching the domain's scope. Returns note.ErrNotFound if no row
+// matched, though the service will already have confirmed the note exists
+// via GetNoteBySlug before calling this (defense in depth against a race,
+// not the primary existence check).
+func (s *Store) DeleteNote(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx,
+		"delete from digitalgarden.digitalgarden_note where note_id = $1",
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("delete note: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return note.ErrNotFound
+	}
+	return nil
 }

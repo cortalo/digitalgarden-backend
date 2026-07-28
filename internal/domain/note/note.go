@@ -18,6 +18,11 @@ var ErrNotFound = errors.New("note: not found")
 // suffixed candidate rather than failing the publish outright.
 var ErrSlugTaken = errors.New("note: slug already taken")
 
+// ErrForbidden means the note exists but the caller isn't its author —
+// returned by Update/Delete when the authenticated user doesn't match
+// AuthorUserID.
+var ErrForbidden = errors.New("note: forbidden")
+
 // Note is the business object (BO): the core entity, with no knowledge of
 // HTTP or the database. ParsedTree reuses markdown.Node directly rather
 // than a duplicate type — Node is already a plain, JSON-serializable data
@@ -49,6 +54,11 @@ type Note struct {
 type SearchHit struct {
 	Note     Note
 	Snippets []string
+}
+
+// IsOwnedBy reports whether userID is this note's author.
+func (n Note) IsOwnedBy(userID int64) bool {
+	return n.AuthorUserID == userID
 }
 
 var slugNonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)

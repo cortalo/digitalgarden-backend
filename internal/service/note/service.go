@@ -19,6 +19,8 @@ type Repository interface {
 	GetNoteBySlug(ctx context.Context, slug string) (note.Note, error)
 	ListNotes(ctx context.Context, limit int32) ([]note.Note, error)
 	CreateNote(ctx context.Context, n note.Note) (note.Note, error)
+	UpdateNote(ctx context.Context, n note.Note) (note.Note, error)
+	DeleteNote(ctx context.Context, id int64) error
 }
 
 // AuthorFinder resolves the display name to snapshot onto a note at
@@ -37,6 +39,7 @@ type AuthorFinder interface {
 // publish.
 type SearchIndex interface {
 	IndexNote(ctx context.Context, n note.Note) error
+	DeleteNote(ctx context.Context, id int64) error
 	Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error)
 }
 
@@ -141,6 +144,93 @@ func (s *Service) Publish(ctx context.Context, authorUserID int64, title, markdo
 	}
 
 	return note.Note{}, fmt.Errorf("publish: no unique slug found for %q after %d attempts", title, maxSlugAttempts)
+}
+
+// Update overwrites an existing note in place — no version history (see
+// CLAUDE.md's scope for this feature). currentSlug identifies which note
+// to edit; only its author (authorUserID) may do so, checked via
+// IsOwnedBy before any write.
+//
+// Unlike Publish, slugOverride only changes the slug if explicitly
+// non-empty — omitting it keeps the existing slug, so editing a note's
+// title never silently breaks a link to it. A non-empty slugOverride is
+// still re-run through Slugify, but unlike Publish, a collision is
+// surfaced immediately as note.ErrSlugTaken rather than retried with a
+// suffix: this slug is an explicit caller choice, not an auto-derived
+// one, so silently renaming it out from under the caller would be
+// surprising.
+func (s *Service) Update(ctx context.Context, authorUserID int64, currentSlug, title, markdownSource, slugOverride, excerptOverride string, tags []string) (note.Note, error) {
+	existing, err := s.repo.GetNoteBySlug(ctx, currentSlug)
+	if err != nil {
+		return note.Note{}, err
+	}
+	if !existing.IsOwnedBy(authorUserID) {
+		return note.Note{}, note.ErrForbidden
+	}
+
+	tree := markdown.Parse([]byte(markdownSource))
+	if tags == nil {
+		tags = []string{}
+	}
+
+	excerpt := strings.TrimSpace(excerptOverride)
+	if excerpt == "" {
+		excerpt = note.ExcerptFrom(tree)
+	}
+
+	slug := existing.Slug
+	if override := strings.TrimSpace(slugOverride); override != "" {
+		slug = note.Slugify(override)
+	}
+
+	n := note.Note{
+		ID:           existing.ID,
+		Title:        title,
+		Slug:         slug,
+		AuthorUserID: existing.AuthorUserID,
+		AuthorName:   existing.AuthorName,
+		RawMarkdown:  markdownSource,
+		ParsedTree:   tree,
+		Excerpt:      excerpt,
+		Tags:         tags,
+		PublishedAt:  existing.PublishedAt,
+	}
+
+	updated, err := s.repo.UpdateNote(ctx, n)
+	if err != nil {
+		return note.Note{}, err
+	}
+
+	// Best-effort, same rationale as Publish's IndexNote call.
+	if err := s.search.IndexNote(ctx, updated); err != nil {
+		log.Printf("note: index note %d: %v", updated.ID, err)
+	}
+
+	return updated, nil
+}
+
+// Delete removes a note outright — no soft-delete flag (see CLAUDE.md's
+// scope). Only the note's author may delete it, checked the same way as
+// Update.
+func (s *Service) Delete(ctx context.Context, authorUserID int64, slug string) error {
+	existing, err := s.repo.GetNoteBySlug(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if !existing.IsOwnedBy(authorUserID) {
+		return note.ErrForbidden
+	}
+
+	if err := s.repo.DeleteNote(ctx, existing.ID); err != nil {
+		return err
+	}
+
+	// Best-effort, same rationale as Publish's IndexNote call.
+	if err := s.search.DeleteNote(ctx, existing.ID); err != nil {
+		log.Printf("note: delete note %d from index: %v", existing.ID, err)
+	}
+
+	return nil
 }
 
 // defaultSearchLimit is how many search hits are returned when the caller

@@ -36,6 +36,17 @@ func (m *mockRepository) CreateNote(ctx context.Context, n note.Note) (note.Note
 	return created, args.Error(1)
 }
 
+func (m *mockRepository) UpdateNote(ctx context.Context, n note.Note) (note.Note, error) {
+	args := m.Called(ctx, n)
+	updated, _ := args.Get(0).(note.Note)
+	return updated, args.Error(1)
+}
+
+func (m *mockRepository) DeleteNote(ctx context.Context, id int64) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
 // mockAuthorFinder implements AuthorFinder.
 type mockAuthorFinder struct {
 	mock.Mock
@@ -54,6 +65,11 @@ type mockSearchIndex struct {
 
 func (m *mockSearchIndex) IndexNote(ctx context.Context, n note.Note) error {
 	args := m.Called(ctx, n)
+	return args.Error(0)
+}
+
+func (m *mockSearchIndex) DeleteNote(ctx context.Context, id int64) error {
+	args := m.Called(ctx, id)
 	return args.Error(0)
 }
 
@@ -106,6 +122,101 @@ func TestPublish_ReturnsNoteWhenIndexingFails(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, created, got)
+}
+
+func TestUpdate_ForbiddenWhenNotOwner(t *testing.T) {
+	repo := new(mockRepository)
+	svc := newTestService(repo, new(mockAuthorFinder), new(mockSearchIndex))
+
+	existing := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7}
+	repo.On("GetNoteBySlug", mock.Anything, "a-title").Return(existing, nil)
+
+	_, err := svc.Update(context.Background(), 99, "a-title", "New Title", testMarkdown, "", "", nil)
+
+	assert.ErrorIs(t, err, note.ErrForbidden)
+	repo.AssertNotCalled(t, "UpdateNote", mock.Anything, mock.Anything)
+}
+
+func TestUpdate_KeepsExistingSlugWhenNotOverridden(t *testing.T) {
+	repo := new(mockRepository)
+	search := new(mockSearchIndex)
+	svc := newTestService(repo, new(mockAuthorFinder), search)
+
+	existing := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7, AuthorName: "Long"}
+	repo.On("GetNoteBySlug", mock.Anything, "a-title").Return(existing, nil)
+	updated := note.Note{ID: 42, Title: "New Title", Slug: "a-title", AuthorUserID: 7, AuthorName: "Long"}
+	repo.On("UpdateNote", mock.Anything, mock.MatchedBy(func(n note.Note) bool {
+		return n.Slug == "a-title" && n.Title == "New Title"
+	})).Return(updated, nil)
+	search.On("IndexNote", mock.Anything, updated).Return(nil)
+
+	got, err := svc.Update(context.Background(), 7, "a-title", "New Title", testMarkdown, "", "", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, updated, got)
+}
+
+func TestUpdate_SlugConflictPropagatesWithoutRetry(t *testing.T) {
+	repo := new(mockRepository)
+	svc := newTestService(repo, new(mockAuthorFinder), new(mockSearchIndex))
+
+	existing := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7}
+	repo.On("GetNoteBySlug", mock.Anything, "a-title").Return(existing, nil)
+	repo.On("UpdateNote", mock.Anything, mock.Anything).Return(note.Note{}, note.ErrSlugTaken)
+
+	_, err := svc.Update(context.Background(), 7, "a-title", "New Title", testMarkdown, "taken-slug", "", nil)
+
+	assert.ErrorIs(t, err, note.ErrSlugTaken)
+	repo.AssertNumberOfCalls(t, "UpdateNote", 1)
+}
+
+func TestUpdate_ReturnsNoteWhenIndexingFails(t *testing.T) {
+	repo := new(mockRepository)
+	search := new(mockSearchIndex)
+	svc := newTestService(repo, new(mockAuthorFinder), search)
+
+	existing := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7}
+	repo.On("GetNoteBySlug", mock.Anything, "a-title").Return(existing, nil)
+	updated := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7}
+	repo.On("UpdateNote", mock.Anything, mock.Anything).Return(updated, nil)
+	search.On("IndexNote", mock.Anything, updated).Return(errors.New("cluster unreachable"))
+
+	got, err := svc.Update(context.Background(), 7, "a-title", "New Title", testMarkdown, "", "", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, updated, got)
+}
+
+func TestDelete_ForbiddenWhenNotOwner(t *testing.T) {
+	repo := new(mockRepository)
+	svc := newTestService(repo, new(mockAuthorFinder), new(mockSearchIndex))
+
+	existing := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7}
+	repo.On("GetNoteBySlug", mock.Anything, "a-title").Return(existing, nil)
+
+	err := svc.Delete(context.Background(), 99, "a-title")
+
+	assert.ErrorIs(t, err, note.ErrForbidden)
+	repo.AssertNotCalled(t, "DeleteNote", mock.Anything, mock.Anything)
+}
+
+// TestDelete_SucceedsWhenSearchIndexDeleteFails is the delete-side
+// counterpart of TestPublish_ReturnsNoteWhenIndexingFails: Postgres is
+// already the source of truth by the time the index cleanup runs, so a
+// search-index hiccup must not turn a successful delete into a failed one.
+func TestDelete_SucceedsWhenSearchIndexDeleteFails(t *testing.T) {
+	repo := new(mockRepository)
+	search := new(mockSearchIndex)
+	svc := newTestService(repo, new(mockAuthorFinder), search)
+
+	existing := note.Note{ID: 42, Slug: "a-title", AuthorUserID: 7}
+	repo.On("GetNoteBySlug", mock.Anything, "a-title").Return(existing, nil)
+	repo.On("DeleteNote", mock.Anything, int64(42)).Return(nil)
+	search.On("DeleteNote", mock.Anything, int64(42)).Return(errors.New("cluster unreachable"))
+
+	err := svc.Delete(context.Background(), 7, "a-title")
+
+	require.NoError(t, err)
 }
 
 func TestSearch_DelegatesToSearchIndex(t *testing.T) {

@@ -23,6 +23,8 @@ type Service interface {
 	Get(ctx context.Context, slug string) (note.Note, error)
 	List(ctx context.Context, limit int32) ([]note.Note, error)
 	Publish(ctx context.Context, authorUserID int64, title, markdownSource, slug, excerpt string, tags []string) (note.Note, error)
+	Update(ctx context.Context, authorUserID int64, currentSlug, title, markdownSource, slugOverride, excerptOverride string, tags []string) (note.Note, error)
+	Delete(ctx context.Context, authorUserID int64, slug string) error
 	Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error)
 }
 
@@ -183,6 +185,49 @@ func (h *Handler) Publish(c *gin.Context) {
 	c.JSON(http.StatusCreated, toNoteResponse(n))
 }
 
+// Update handles PUT /api/notes/:slug, behind authhandler.RequireAuth.
+// Same body shape as Publish (a full replace, not a partial patch) — see
+// the note service's own doc comment on Update for the slug/excerpt
+// override semantics.
+func (h *Handler) Update(c *gin.Context) {
+	userID, ok := authhandler.UserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	var req publishRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	n, err := h.svc.Update(c.Request.Context(), userID, c.Param("slug"), req.Title, req.Markdown, req.Slug, req.Excerpt, req.Tags)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, toNoteResponse(n))
+}
+
+// Delete handles DELETE /api/notes/:slug, behind authhandler.RequireAuth.
+// No soft-delete — the row is gone outright (see CLAUDE.md's scope).
+func (h *Handler) Delete(c *gin.Context) {
+	userID, ok := authhandler.UserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	if err := h.svc.Delete(c.Request.Context(), userID, c.Param("slug")); err != nil {
+		respondError(c, err)
+		return
+	}
+
+	c.Status(http.StatusNoContent)
+}
+
 var errInvalidLimit = errors.New("limit must be a positive integer")
 
 // List handles GET /api/notes. limit is an optional query param; the
@@ -258,6 +303,10 @@ func respondError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, note.ErrNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+	case errors.Is(err, note.ErrForbidden):
+		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+	case errors.Is(err, note.ErrSlugTaken):
+		c.JSON(http.StatusConflict, gin.H{"error": "slug already taken"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}

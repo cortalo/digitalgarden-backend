@@ -40,7 +40,7 @@ func main() {
 	r := gin.Default()
 	r.Use(cors.New(cors.Config{
 		AllowOrigins: []string{cfg.AllowedOrigin},
-		AllowMethods: []string{"GET", "POST"},
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE"},
 		AllowHeaders: []string{"Content-Type", "Authorization"},
 	}))
 
@@ -64,6 +64,8 @@ func main() {
 	r.GET("/api/notes/:slug", noteHandler.Get)
 	r.GET("/api/notes/:slug/download", noteHandler.Download)
 	r.POST("/api/notes", authhandler.RequireAuth(tokenIssuer), noteHandler.Publish)
+	r.PUT("/api/notes/:slug", authhandler.RequireAuth(tokenIssuer), noteHandler.Update)
+	r.DELETE("/api/notes/:slug", authhandler.RequireAuth(tokenIssuer), noteHandler.Delete)
 
 	// Vercel's Go runtime assigns a port dynamically and proxies to it via
 	// the PORT env var — a hardcoded ":8080" is unreachable in that
