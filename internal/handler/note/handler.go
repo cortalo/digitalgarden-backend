@@ -39,14 +39,15 @@ func NewHandler(svc Service) *Handler {
 // needs": the frontend renders Tree by walking node.type, never by parsing
 // markdown itself.
 type noteResponse struct {
-	ID          int64         `json:"id"`
-	Title       string        `json:"title"`
-	Slug        string        `json:"slug"`
-	Author      string        `json:"author"`
-	Excerpt     string        `json:"excerpt"`
-	Tags        []string      `json:"tags"`
-	PublishedAt time.Time     `json:"published_at"`
-	Tree        markdown.Node `json:"tree"`
+	ID           int64         `json:"id"`
+	Title        string        `json:"title"`
+	Slug         string        `json:"slug"`
+	Author       string        `json:"author"`
+	AuthorUserID int64         `json:"author_user_id"`
+	Excerpt      string        `json:"excerpt"`
+	Tags         []string      `json:"tags"`
+	PublishedAt  time.Time     `json:"published_at"`
+	Tree         markdown.Node `json:"tree"`
 }
 
 // summaryResponse is what the feed lists: enough to render a card and link
@@ -64,14 +65,15 @@ type summaryResponse struct {
 
 func toNoteResponse(n note.Note) noteResponse {
 	return noteResponse{
-		ID:          n.ID,
-		Title:       n.Title,
-		Slug:        n.Slug,
-		Author:      n.AuthorName,
-		Excerpt:     n.Excerpt,
-		Tags:        n.Tags,
-		PublishedAt: n.PublishedAt,
-		Tree:        n.ParsedTree,
+		ID:           n.ID,
+		Title:        n.Title,
+		Slug:         n.Slug,
+		Author:       n.AuthorName,
+		AuthorUserID: n.AuthorUserID,
+		Excerpt:      n.Excerpt,
+		Tags:         n.Tags,
+		PublishedAt:  n.PublishedAt,
+		Tree:         n.ParsedTree,
 	}
 }
 
