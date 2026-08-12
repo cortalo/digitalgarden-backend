@@ -30,27 +30,31 @@ type AuthorFinder interface {
 	Get(ctx context.Context, id int64) (userservice.User, error)
 }
 
-// SearchIndex is a second, independent port — a keyword-searchable index
-// that mirrors a subset of what's in Postgres (title, author name,
-// excerpt, raw content). Postgres remains the sole source of truth
-// (see Repository); this index only exists to answer "find by keyword"
-// queries. Kept in sync from Publish (see IndexNote's call site below),
-// not treated as authoritative — a failed IndexNote never fails a
-// publish.
-type SearchIndex interface {
-	IndexNote(ctx context.Context, n note.Note) error
-	DeleteNote(ctx context.Context, id int64) error
+// Searcher is a second, independent port — a keyword-searchable index that
+// mirrors a subset of what's in Postgres (title, author name, excerpt, raw
+// content). Postgres remains the sole source of truth (see Repository);
+// this index only exists to answer "find by keyword" queries.
+type Searcher interface {
 	Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error)
 }
 
 type Service struct {
 	repo    Repository
 	authors AuthorFinder
-	search  SearchIndex
+	search  Searcher
+
+	// onNoteIndexed and onNoteDeleted are optional side effects fired
+	// after a successful write — kept in sync from Publish/Update/Delete,
+	// not treated as authoritative. A failed callback is logged and
+	// swallowed, never turned into a failed publish/update/delete: the
+	// backing index is a derived, rebuildable cache (see CLAUDE.md). Nil
+	// is valid and simply means "no such side effect wired up".
+	onNoteIndexed func(ctx context.Context, n note.Note) error
+	onNoteDeleted func(ctx context.Context, id int64) error
 }
 
-func NewService(repo Repository, authors AuthorFinder, search SearchIndex) *Service {
-	return &Service{repo: repo, authors: authors, search: search}
+func NewService(repo Repository, authors AuthorFinder, search Searcher, onNoteIndexed func(ctx context.Context, n note.Note) error, onNoteDeleted func(ctx context.Context, id int64) error) *Service {
+	return &Service{repo: repo, authors: authors, search: search, onNoteIndexed: onNoteIndexed, onNoteDeleted: onNoteDeleted}
 }
 
 // Get returns a single published note by slug.
@@ -129,12 +133,10 @@ func (s *Service) Publish(ctx context.Context, authorUserID int64, title, markdo
 
 		created, err := s.repo.CreateNote(ctx, n)
 		if err == nil {
-			// Best-effort: Postgres is already the source of truth for
-			// this note, so a search-index hiccup must not fail a
-			// publish that otherwise succeeded — the index is a
-			// derived, rebuildable cache (see CLAUDE.md).
-			if err := s.search.IndexNote(ctx, created); err != nil {
-				log.Printf("note: index note %d: %v", created.ID, err)
+			if s.onNoteIndexed != nil {
+				if err := s.onNoteIndexed(ctx, created); err != nil {
+					log.Printf("note: index note %d: %v", created.ID, err)
+				}
 			}
 			return created, nil
 		}
@@ -201,9 +203,10 @@ func (s *Service) Update(ctx context.Context, authorUserID int64, currentSlug, t
 		return note.Note{}, err
 	}
 
-	// Best-effort, same rationale as Publish's IndexNote call.
-	if err := s.search.IndexNote(ctx, updated); err != nil {
-		log.Printf("note: index note %d: %v", updated.ID, err)
+	if s.onNoteIndexed != nil {
+		if err := s.onNoteIndexed(ctx, updated); err != nil {
+			log.Printf("note: index note %d: %v", updated.ID, err)
+		}
 	}
 
 	return updated, nil
@@ -225,9 +228,10 @@ func (s *Service) Delete(ctx context.Context, authorUserID int64, slug string) e
 		return err
 	}
 
-	// Best-effort, same rationale as Publish's IndexNote call.
-	if err := s.search.DeleteNote(ctx, existing.ID); err != nil {
-		log.Printf("note: delete note %d from index: %v", existing.ID, err)
+	if s.onNoteDeleted != nil {
+		if err := s.onNoteDeleted(ctx, existing.ID); err != nil {
+			log.Printf("note: delete note %d from index: %v", existing.ID, err)
+		}
 	}
 
 	return nil

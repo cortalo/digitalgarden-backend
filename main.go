@@ -57,7 +57,7 @@ func main() {
 	r.POST("/api/auth/google", authHandler.Login)
 
 	searchIndex := elasticsearch.New(cfg.BonsaiURL, cfg.BonsaiAccessKey, cfg.BonsaiAccessSecret)
-	noteService := noteservice.NewService(db, userService, searchIndex)
+	noteService := noteservice.NewService(db, userService, searchIndex, searchIndex.IndexNote, searchIndex.DeleteNote)
 	noteHandler := notehandler.NewHandler(noteService)
 	r.GET("/api/notes", noteHandler.List)
 	r.GET("/api/notes/search", noteHandler.Search)

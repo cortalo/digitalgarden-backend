@@ -58,7 +58,10 @@ func (m *mockAuthorFinder) Get(ctx context.Context, id int64) (userservice.User,
 	return u, args.Error(1)
 }
 
-// mockSearchIndex implements SearchIndex.
+// mockSearchIndex implements Searcher (its Search method) and additionally
+// provides IndexNote/DeleteNote so newTestService can pass them as the
+// onNoteIndexed/onNoteDeleted callbacks — same mock, no separate fake
+// needed for the callback side.
 type mockSearchIndex struct {
 	mock.Mock
 }
@@ -80,7 +83,7 @@ func (m *mockSearchIndex) Search(ctx context.Context, keyword string, limit int3
 }
 
 func newTestService(repo *mockRepository, authors *mockAuthorFinder, search *mockSearchIndex) *Service {
-	return NewService(repo, authors, search)
+	return NewService(repo, authors, search, search.IndexNote, search.DeleteNote)
 }
 
 const testMarkdown = "# A Title\n\nSome content.\n"
@@ -117,6 +120,24 @@ func TestPublish_ReturnsNoteWhenIndexingFails(t *testing.T) {
 	created := note.Note{ID: 42, Title: "A Title", Slug: "a-title", AuthorUserID: 7, AuthorName: "Long"}
 	repo.On("CreateNote", mock.Anything, mock.Anything).Return(created, nil)
 	search.On("IndexNote", mock.Anything, created).Return(errors.New("cluster unreachable"))
+
+	got, err := svc.Publish(context.Background(), 7, "A Title", testMarkdown, "", "", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, created, got)
+}
+
+// TestPublish_SkipsIndexingWhenCallbackNil locks in the nil-callback path:
+// onNoteIndexed is optional, and a nil value must be skipped rather than
+// invoked — invoking a nil func would panic, which would fail this test.
+func TestPublish_SkipsIndexingWhenCallbackNil(t *testing.T) {
+	repo := new(mockRepository)
+	authors := new(mockAuthorFinder)
+	svc := NewService(repo, authors, new(mockSearchIndex), nil, nil)
+
+	authors.On("Get", mock.Anything, int64(7)).Return(userservice.User{ID: 7, Name: "Long"}, nil)
+	created := note.Note{ID: 42, Title: "A Title", Slug: "a-title", AuthorUserID: 7, AuthorName: "Long"}
+	repo.On("CreateNote", mock.Anything, mock.Anything).Return(created, nil)
 
 	got, err := svc.Publish(context.Background(), 7, "A Title", testMarkdown, "", "", nil)
 

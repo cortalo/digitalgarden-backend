@@ -18,8 +18,9 @@ import (
 const noteIndex = "note"
 
 // Client wraps everything needed to index and search note documents.
-// Consumers depend on a small interface they define themselves (see
-// noteservice.SearchIndex), not on this concrete type.
+// Consumers depend on a small interface they define themselves for
+// searching (see noteservice.Searcher); IndexNote/DeleteNote are wired up
+// as standalone callbacks instead, not on this concrete type.
 type Client struct {
 	baseURL      string
 	accessKey    string

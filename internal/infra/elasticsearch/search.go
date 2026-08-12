@@ -58,7 +58,7 @@ type searchResponse struct {
 	} `json:"hits"`
 }
 
-// Search satisfies noteservice.SearchIndex: a keyword match across each
+// Search satisfies noteservice.Searcher: a keyword match across each
 // indexed note's title, author name, excerpt, and content, most relevant
 // first.
 func (c *Client) Search(ctx context.Context, keyword string, limit int32) ([]note.SearchHit, error) {
