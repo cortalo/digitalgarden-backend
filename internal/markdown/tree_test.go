@@ -264,3 +264,125 @@ func TestParse_Link(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("parsed tree:\n%s", out)
 }
+
+const blockquoteMarkdown = `> Just an ordinary quote.
+
+> [not a callout] this only looks like one.
+`
+
+func TestParse_Blockquote(t *testing.T) {
+	got := Parse([]byte(blockquoteMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 2)
+
+	// A plain quote gets its own type rather than falling through to
+	// "unknown" — the frontend can't render it as a quote otherwise.
+	quote := got.Children[0]
+	assert.Equal(t, "blockquote", quote.Type)
+	require.Len(t, quote.Children, 1)
+	assert.Equal(t, "paragraph", quote.Children[0].Type)
+
+	// A bracketed word without the "!" isn't a callout marker, and its
+	// text must survive intact.
+	notCallout := got.Children[1]
+	assert.Equal(t, "blockquote", notCallout.Type)
+	require.Len(t, notCallout.Children, 1)
+	assert.Equal(t, "paragraph", notCallout.Children[0].Type)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
+// calloutMarkdown is copied verbatim from the real note this support was
+// added for (VCO Semester Project.md). Obsidian's callout syntax is a
+// blockquote whose first line carries a `[!kind]` marker plus an optional
+// title. goldmark knows nothing about it and parses that marker into three
+// stray inline text nodes ("[", "!todo", "] Task") glued to the body by a
+// soft line break, all inside a single paragraph — which is what leaks to
+// the frontend today.
+//
+// The body is read back out of the paragraph's raw source lines and kept
+// as opaque text, the same treatment mathBlock/tikzBlock/codeBlock get.
+// That holds only as long as a callout body stays plain prose: a formula
+// or a list inside one would reach the frontend as unparsed markdown. No
+// callout in the vault has either today, and this is a deliberate v1
+// narrowing, not an oversight.
+const calloutMarkdown = `> [!todo] Task
+> Carry out the similar procedure for the active part.
+`
+
+func TestParse_Callout(t *testing.T) {
+	got := Parse([]byte(calloutMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	callout := got.Children[0]
+	// The kind rides in the type name instead of a dedicated Node field:
+	// only one kind is in real use, so four new fields on a struct shared
+	// by every node type isn't worth it. The "callout-" prefix leaves the
+	// frontend able to recognize a kind it has no specific case for.
+	assert.Equal(t, "callout-todo", callout.Type)
+
+	// The marker and the title are both consumed. The title is always
+	// "Task" in real use and carries nothing the frontend needs; leaking
+	// the marker's three text fragments into the body is the bug this
+	// change exists to fix.
+	assert.Equal(t, "Carry out the similar procedure for the active part.", callout.Text)
+	assert.Empty(t, callout.Children)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
+// calloutMultiLineMarkdown covers a body written across several source
+// lines. goldmark folds them into one paragraph and drops the newlines
+// between them, so the line structure has to come from the paragraph's
+// raw source segments, not from its inline children.
+const calloutMultiLineMarkdown = `> [!TODO]- Task
+> Build the passive part model.
+> Compare with simulations.
+`
+
+func TestParse_CalloutMultiLine(t *testing.T) {
+	got := Parse([]byte(calloutMultiLineMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	callout := got.Children[0]
+	// Kind is lowercased, and the fold marker ("-"/"+") is consumed
+	// rather than becoming part of the kind. Folding isn't modeled yet;
+	// what matters here is that the marker doesn't leak into the type.
+	assert.Equal(t, "callout-todo", callout.Type)
+	assert.Equal(t, "Build the passive part model.\nCompare with simulations.", callout.Text)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
+// calloutTitleOnlyMarkdown covers a callout whose title line is the whole
+// callout: once that line is consumed there is nothing left, so Text must
+// come back empty rather than holding the title or the marker.
+const calloutTitleOnlyMarkdown = `> [!todo] Task
+`
+
+func TestParse_CalloutTitleOnly(t *testing.T) {
+	got := Parse([]byte(calloutTitleOnlyMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	callout := got.Children[0]
+	assert.Equal(t, "callout-todo", callout.Type)
+	assert.Empty(t, callout.Text)
+	assert.Empty(t, callout.Children)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}

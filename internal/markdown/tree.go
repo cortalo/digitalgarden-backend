@@ -6,6 +6,7 @@
 package markdown
 
 import (
+	"regexp"
 	"strings"
 
 	mathjax "github.com/litao91/goldmark-mathjax"
@@ -100,6 +101,15 @@ func convert(n ast.Node, source []byte) Node {
 	case mathjax.KindMathBlock:
 		b := n.(*mathjax.MathBlock)
 		return Node{Type: "mathBlock", Text: linesText(b, source)}
+	case ast.KindBlockquote:
+		// An Obsidian callout is not its own syntax: it's an ordinary
+		// blockquote whose first line happens to open with a `[!kind]`
+		// marker. goldmark has no notion of it, so the distinction has to
+		// be drawn here.
+		if kind, body, rest, ok := parseCallout(n, source); ok {
+			return Node{Type: "callout-" + kind, Text: body, Children: rest}
+		}
+		return Node{Type: "blockquote", Children: convertChildren(n, source)}
 	case ast.KindFencedCodeBlock:
 		fcb := n.(*ast.FencedCodeBlock)
 		lang := string(fcb.Language(source))
@@ -143,6 +153,72 @@ func inlineText(n ast.Node, source []byte) string {
 // codeBlock, tikzBlock) rather than markdown to keep parsing further.
 func linesText(n interface{ Lines() *text.Segments }, source []byte) string {
 	return strings.TrimRight(string(n.Lines().Value(source)), "\n")
+}
+
+// calloutMarker matches the opening marker of an Obsidian callout: a
+// blockquote whose first line starts with `[!kind]`, optionally followed
+// by a `+`/`-` fold hint. The kind can't contain whitespace or `]`, which
+// is what keeps an ordinary quote beginning with a bracketed phrase
+// ("[see also] ...") from being mistaken for one.
+var calloutMarker = regexp.MustCompile(`^\[!([^\]\s]+)\][-+]?`)
+
+// parseCallout reports whether a blockquote node is an Obsidian callout
+// and, if so, returns its lowercased kind plus its body.
+//
+// Two things make this messier than reading the node's inline children.
+// The marker is inline content as far as goldmark is concerned, and its
+// link parser shreds `[!todo] Task` into three separate text nodes ("[",
+// "!todo", "] Task"). And a callout's title line and its body are folded
+// into a *single* paragraph joined by a soft line break, because only a
+// blank line ends a paragraph in CommonMark and `> ` lines in a row have
+// none. Reading the paragraph's raw source lines instead sidesteps both:
+// line 0 is exactly the title line, and dropping it leaves exactly the
+// body.
+//
+// The kind is lowercased but not validated against a list — Obsidian
+// accepts arbitrary kinds and styles unknown ones like a plain note, so a
+// whitelist here would only make a custom kind disappear. Since the kind
+// travels in the node's type name ("callout-todo") rather than in a field
+// of its own, the frontend recognizes a kind it has no case for by the
+// "callout-" prefix.
+//
+// The title is parsed and then discarded. It carries nothing the frontend
+// needs (it is "Task" in every callout in the vault this was built for),
+// and modeling it would mean either a new Node field or splitting the
+// title's own inline nodes off the body's — see the design notes in
+// tree_test.go for why neither is worth it yet.
+//
+// The body is kept as opaque text, the same treatment mathBlock and
+// codeBlock get. That is only correct while a callout body stays plain
+// prose: inline markup inside one (a formula, a link) reaches the
+// frontend as unparsed markdown, which is a deliberate v1 narrowing, not
+// an oversight — no callout in the vault has any today. Whole blocks
+// following the first paragraph (a list, a second paragraph) are still
+// converted normally into rest rather than dropped, so nothing silently
+// vanishes if one shows up.
+func parseCallout(n ast.Node, source []byte) (kind, body string, rest []Node, ok bool) {
+	first, isParagraph := n.FirstChild().(*ast.Paragraph)
+	if !isParagraph || first.Lines().Len() == 0 {
+		return "", "", nil, false
+	}
+
+	titleLine := first.Lines().At(0)
+	marker := calloutMarker.FindSubmatch(titleLine.Value(source))
+	if marker == nil {
+		return "", "", nil, false
+	}
+
+	var sb strings.Builder
+	for i := 1; i < first.Lines().Len(); i++ {
+		line := first.Lines().At(i)
+		sb.Write(line.Value(source))
+	}
+
+	for c := first.NextSibling(); c != nil; c = c.NextSibling() {
+		rest = append(rest, convert(c, source))
+	}
+
+	return strings.ToLower(string(marker[1])), strings.TrimRight(sb.String(), "\n"), rest, true
 }
 
 func convertChildren(n ast.Node, source []byte) []Node {
