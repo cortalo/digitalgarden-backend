@@ -10,6 +10,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/litao91/goldmark-mathjax v0.0.0-20210217064022-a43cf739a50f
 	github.com/stretchr/testify v1.11.1
+	github.com/titanous/json5 v1.0.0
 	github.com/yuin/goldmark v1.8.4
 	google.golang.org/api v0.290.0
 )

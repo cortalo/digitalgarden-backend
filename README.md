@@ -31,6 +31,11 @@ JS/WASM libraries with no Go equivalent.
   backend)
 - **SVG** blocks (` ```svg `, from Obsidian's SVG Editor plugin): passed
   through as-is, ready to drop into the DOM
+- **WaveDrom** timing diagrams (` ```wavedrom `): the source is WaveJSON
+  (a JS object literal, not JSON), so Go normalizes it to strict JSON
+  and the frontend only ever needs `JSON.parse` — never `eval`, which is
+  how WaveDrom's own browser loader reads it. A block that doesn't
+  normalize falls back to a plain code block
 - Obsidian's **CircuiTikZ Designer** plugin blocks: a preprocessing pass
   unwraps its JSON payload into a plain SVG block before parsing, so it's
   indistinguishable from a native SVG block downstream

@@ -141,7 +141,52 @@ func TestParse_Svg(t *testing.T) {
 	t.Logf("parsed tree:\n%s", out)
 }
 
-const codeMarkdown = "```go\nfmt.Println(\"hi\")\n```\n\n```\nno language here\n```\n"
+// WaveJSON as written in a real note: unquoted keys, single quotes, an
+// empty `{}` spacer lane, and non-ASCII subscripts in data labels.
+const wavedromMarkdown = "```wavedrom\n{signal: [\n  {name: 'clk', wave: 'p...'},\n  {},\n  {name: 'D0', wave: '3.3.', data: ['D0₀','D0₁']},\n]}\n```\n"
+
+func TestParse_Wavedrom(t *testing.T) {
+	got := Parse([]byte(wavedromMarkdown))
+
+	require.Equal(t, "root", got.Type)
+	require.Len(t, got.Children, 1)
+
+	wd := got.Children[0]
+	assert.Equal(t, "wavedromBlock", wd.Type)
+	assert.Empty(t, wd.Lang)
+	assert.JSONEq(t,
+		`{"signal":[{"name":"clk","wave":"p..."},{},{"name":"D0","wave":"3.3.","data":["D0₀","D0₁"]}]}`,
+		wd.Text,
+	)
+
+	out, err := json.MarshalIndent(got, "", "  ")
+	require.NoError(t, err)
+	t.Logf("parsed tree:\n%s", out)
+}
+
+// A wavedrom fence that can't be normalized to a JSON object falls back
+// to a plain codeBlock carrying the untouched source, so the note still
+// shows it instead of handing the frontend a block it can't render.
+func TestParse_WavedromFallback(t *testing.T) {
+	cases := map[string]string{
+		"malformed":      "{signal: [{name: 'a' wave: '01'}]}",
+		"js expression":  "{signal: [{name: 'a', wave: '0'.repeat(4)}]}",
+		"non-object top": "[{name: 'a', wave: '01'}]",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := Parse([]byte("```wavedrom\n" + src + "\n```\n"))
+
+			require.Len(t, got.Children, 1)
+			block := got.Children[0]
+			assert.Equal(t, "codeBlock", block.Type)
+			assert.Equal(t, "wavedrom", block.Lang)
+			assert.Equal(t, src, block.Text)
+		})
+	}
+}
+
+const codeMarkdown ="```go\nfmt.Println(\"hi\")\n```\n\n```\nno language here\n```\n"
 
 func TestParse_CodeBlock(t *testing.T) {
 	got := Parse([]byte(codeMarkdown))

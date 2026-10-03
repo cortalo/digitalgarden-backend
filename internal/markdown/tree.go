@@ -6,10 +6,12 @@
 package markdown
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 
 	mathjax "github.com/litao91/goldmark-mathjax"
+	"github.com/titanous/json5"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
@@ -125,6 +127,15 @@ func convert(n ast.Node, source []byte) Node {
 		if lang == "svg" {
 			return Node{Type: "svgBlock", Text: linesText(fcb, source)}
 		}
+		// WaveDrom is a plugin node like tikz, but its source is WaveJSON —
+		// a JS object literal, not JSON — so Go normalizes it to strict
+		// JSON first, see normalizeWaveJSON. A block that doesn't normalize
+		// stays a plain codeBlock, so the note still renders its source.
+		if lang == "wavedrom" {
+			if text, ok := normalizeWaveJSON(linesText(fcb, source)); ok {
+				return Node{Type: "wavedromBlock", Text: text}
+			}
+		}
 		return Node{Type: "codeBlock", Lang: lang, Text: linesText(fcb, source)}
 	default:
 		return Node{Type: "unknown", Children: convertChildren(n, source)}
@@ -153,6 +164,33 @@ func inlineText(n ast.Node, source []byte) string {
 // codeBlock, tikzBlock) rather than markdown to keep parsing further.
 func linesText(n interface{ Lines() *text.Segments }, source []byte) string {
 	return strings.TrimRight(string(n.Lines().Value(source)), "\n")
+}
+
+// normalizeWaveJSON turns a wavedrom fence's WaveJSON source into strict
+// JSON, reporting false if it can't.
+//
+// WaveJSON is written as a JS object literal (`{signal: [{name: 'clk'}]}`
+// — unquoted keys, single quotes), which JSON.parse rejects. WaveDrom's
+// own browser loader gets around that by eval'ing the source, which on a
+// public site rendering user-written notes would be an XSS hole. Parsing
+// it as JSON5 here instead means the frontend only ever needs JSON.parse.
+//
+// Every WaveDrom diagram kind (signal, reg, assign) is a top-level
+// object, so anything else is rejected along with sources JSON5 can't
+// parse — e.g. ones relying on real JS expressions, which only eval
+// could evaluate. Key order is not preserved (Go sorts map keys on
+// marshal), which WaveDrom doesn't depend on: ordering it cares about,
+// like the lanes of a signal diagram, lives in arrays.
+func normalizeWaveJSON(src string) (string, bool) {
+	var v map[string]any
+	if err := json5.Unmarshal([]byte(src), &v); err != nil {
+		return "", false
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return "", false
+	}
+	return string(out), true
 }
 
 // calloutMarker matches the opening marker of an Obsidian callout: a
